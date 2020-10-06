@@ -76,18 +76,15 @@ query_pr_status() {
 }
 
 save_cache() {
-  local -r filename="$1"
+  local -r filepath="$1"
   local -r content="$2"
-
-  local -r filepath="${CACHE_DIR}/${filename}"
 
   echo -n "${content}" >"${filepath}" # this can override the existing file
 }
 
 restore_cache() {
-  local -r filename="$1"
+  local -r filepath="$1"
 
-  local -r filepath="${CACHE_DIR}/${filename}"
   if [[ ! -f "${filepath}" ]]; then
     return 1
   fi
@@ -102,6 +99,10 @@ restore_cache() {
   fi
 
   return 1
+}
+
+clear_cache() {
+  echo
 }
 
 escape_filename() {
@@ -179,23 +180,20 @@ create_prompt() {
 }
 
 main() {
-  local need_clear_cache
+  local clear_cache_flag
 
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
+      --clear-cache=*)
+        clear_cache_flag=${1#*=}
+        ;;
       --clear-cache)
-        need_clear_cache='true'
+        clear_cache_flag='local'
         ;;
       *) ;;
     esac
     shift
   done
-
-  if [[ "${need_clear_cache}" == 'true' ]]; then
-    rm -rf "${CACHE_DIR}"
-    echo "Cleared cache: ${CACHE_DIR}" >&2
-    return
-  fi
 
   [[ -d "${CACHE_DIR}" ]] || mkdir -p "${CACHE_DIR}"
 
@@ -208,9 +206,27 @@ main() {
     return # skip when at main|master branch
   fi
 
-  local -r cache_filename=$(escape_filename "${owner}-${repo}-${branch}")
+  local -r cache_filepath="${CACHE_DIR}/$(escape_filename "${owner}-${repo}-${branch}")"
 
-  if cached_content=$(restore_cache "${cache_filename}"); then
+  case $clear_cache_flag in
+    '') ;;
+    'local')
+      rm "${cache_filepath}"
+      echo "Cleared cache: ${cache_filepath}" >&2
+      return
+      ;;
+    'all')
+      rm -rf "${CACHE_DIR}"
+      echo "Cleared cache: ${CACHE_DIR}" >&2
+      return
+      ;;
+    *)
+      echo "[ERROR] invalid --clear-cache value: ${clear_cache_flag}" >&2
+      return 1
+      ;;
+  esac
+
+  if cached_content=$(restore_cache "${cache_filepath}"); then
     echo -n "${cached_content}"
     return
   fi
@@ -220,7 +236,7 @@ main() {
 
   local -r prompt="$(create_prompt "${query_result}")"
 
-  save_cache "${cache_filename}" "${prompt}"
+  save_cache "${cache_filepath}" "${prompt}"
   echo -n "${prompt}"
 }
 
