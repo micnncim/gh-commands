@@ -101,10 +101,6 @@ restore_cache() {
   return 1
 }
 
-clear_cache() {
-  echo
-}
-
 escape_filename() {
   local -r filename="$1"
 
@@ -195,17 +191,15 @@ main() {
     shift
   done
 
-  [[ -d "${CACHE_DIR}" ]] || mkdir -p "${CACHE_DIR}"
-
-  local -r abspath=$(git rev-parse --show-toplevel)
-  local -r owner=$(basename "$(dirname "${abspath}")")
-  local -r repo=$(basename "${abspath}")
   local -r branch=$(git rev-parse --abbrev-ref HEAD)
 
   if [[ "${branch}" == "${MAIN_BRANCH}" || "${branch}" == "${MASTER_BRANCH}" ]]; then
     return # skip when at main|master branch
   fi
 
+  local -r abspath=$(git rev-parse --show-toplevel)
+  local -r owner=$(basename "$(dirname "${abspath}")")
+  local -r repo=$(basename "${abspath}")
   local -r cache_filepath="${CACHE_DIR}/$(escape_filename "${owner}-${repo}-${branch}")"
 
   case $clear_cache_flag in
@@ -233,10 +227,11 @@ main() {
 
   # Execute GitHub GraphQL API v4
   local -r query_result=$(query_pr_status "${owner}" "${repo}" "${branch}")
-
   local -r prompt="$(create_prompt "${query_result}")"
 
+  [[ -d "${CACHE_DIR}" ]] || mkdir -p "${CACHE_DIR}"
   save_cache "${cache_filepath}" "${prompt}"
+
   echo -n "${prompt}"
 }
 
