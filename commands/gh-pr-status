@@ -1,0 +1,102 @@
+#!/bin/bash
+
+readonly ESC=$(printf '\033')
+readonly RED="${ESC}[31m"
+readonly GREEN="${ESC}[32m"
+readonly YELLOW="${ESC}[33m"
+readonly MAGENTA="${ESC}[35m"
+readonly CYAN="${ESC}[36m"
+readonly NO_COLOR="${ESC}[m"
+
+query() {
+  local -r abspath=$(git rev-parse --show-toplevel)
+  local -r owner=$(basename "$(dirname "${abspath}")")
+  local -r repo=$(basename "${abspath}")
+  local -r branch=$(git rev-parse --abbrev-ref HEAD)
+
+  # shellcheck disable=SC2016
+  gh api graphql -F owner="${owner}" -F name="${repo}" -F headRefName="${branch}" -f query='
+  query ($owner: String!, $name: String!, $headRefName: String!) {
+    repository(owner: $owner, name: $name) {
+      pullRequests(headRefName: $headRefName, first: 1) {
+        nodes {
+          number
+          merged
+          mergeable
+          reviews(last: 1) {
+            nodes {
+              state
+            }
+          }
+        }
+      }
+    }
+  }
+  '
+}
+
+main() {
+  local -r result=$(query)
+
+  local -r number=$(echo "${result}" | jq -r '.data.repository.pullRequests.nodes[0].number | select( . != null)')
+  local -r merged=$(echo "${result}" | jq -r '.data.repository.pullRequests.nodes[0].merged | select( . != null)')
+  local -r mergeable=$(echo "${result}" | jq -r '.data.repository.pullRequests.nodes[0].mergeable | select( . != null)')
+  local -r review_state=$(echo "${result}" | jq -r '.data.repository.pullRequests.nodes[0].reviews.nodes[0].state | select(. != null)')
+
+  local ret
+
+  if [[ -n "${number}" ]]; then
+    ret+="${CYAN}${number}${NO_COLOR} "
+  fi
+
+  if [[ "${merged}" == 'true' ]]; then
+    ret+="${MAGENTA}MERGED${NO_COLOR}"
+    echo "${ret}"
+    return
+  fi
+
+  if [[ -n "${mergeable}" ]]; then
+    local mergeable_color
+    case $mergeable in
+      'MERGEABLE')
+        mergeable_color="${GREEN}"
+        ;;
+      'CONFLICTING')
+        mergeable_color="${RED}"
+        ;;
+      'UNKNOWN')
+        mergeable_color="${YELLOW}"
+        ;;
+      *)
+        echo "[ERROR] invalid mergeable state: ${mergeable}" >&2
+        return 1
+        ;;
+    esac
+
+    ret+="${mergeable_color}${mergeable}${NO_COLOR} "
+  fi
+
+  if [[ -n "${review_state}" ]]; then
+    local review_state_color
+    case $review_state in
+      'APPROVED')
+        review_state_color="${GREEN}"
+        ;;
+      'CHANGES_REQUESTED')
+        review_state_color="${RED}"
+        ;;
+      'COMMENTED' | 'DISMISSED' | 'PENDING')
+        review_state_color="${YELLOW}"
+        ;;
+      *)
+        echo "[ERROR] invalid review state: ${review_state}" >&2
+        return 1
+        ;;
+    esac
+    ret+="${review_state_color}${review_state}${NO_COLOR} "
+  fi
+
+  echo "${ret}"
+}
+
+main "$@"
