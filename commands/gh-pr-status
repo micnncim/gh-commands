@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# gh-pr-status is intended to be used with starship/starship custom commands.
+# https://starship.rs/config/#custom-commands
+
 readonly ESC=$(printf '\033')
 readonly RED="${ESC}[31m"
 readonly GREEN="${ESC}[32m"
@@ -72,7 +75,6 @@ main() {
         return 1
         ;;
     esac
-
     ret+="${mergeable_color}${mergeable}${NO_COLOR} "
   fi
 
@@ -96,7 +98,7 @@ main() {
     ret+="${review_state_color}${review_state}${NO_COLOR} "
   fi
 
-  echo "${ret}"
+  echo -n "${ret}"
 }
 
 main "$@"
