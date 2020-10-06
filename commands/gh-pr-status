@@ -179,6 +179,24 @@ create_prompt() {
 }
 
 main() {
+  local need_clear_cache
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --clear-cache)
+        need_clear_cache='true'
+        ;;
+      *) ;;
+    esac
+    shift
+  done
+
+  if [[ "${need_clear_cache}" == 'true' ]]; then
+    rm -rf "${CACHE_DIR}"
+    echo "Cleared cache: ${CACHE_DIR}" >&2
+    return
+  fi
+
   [[ -d "${CACHE_DIR}" ]] || mkdir -p "${CACHE_DIR}"
 
   local -r abspath=$(git rev-parse --show-toplevel)
