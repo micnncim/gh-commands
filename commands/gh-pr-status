@@ -17,6 +17,10 @@ query() {
   local -r repo=$(basename "${abspath}")
   local -r branch=$(git rev-parse --abbrev-ref HEAD)
 
+  # https://cli.github.com/manual/gh_api
+  # https://docs.github.com/en/free-pro-team@latest/graphql/reference/queries#repository
+  # https://docs.github.com/en/free-pro-team@latest/graphql/reference/objects#repository
+  # https://docs.github.com/en/free-pro-team@latest/graphql/reference/objects#pullrequest
   # shellcheck disable=SC2016
   gh api graphql -F owner="${owner}" -F name="${repo}" -F headRefName="${branch}" -f query='
   query ($owner: String!, $name: String!, $headRefName: String!) {
@@ -58,6 +62,7 @@ main() {
     return
   fi
 
+  # https://docs.github.com/en/free-pro-team@latest/graphql/reference/enums#mergeablestate
   if [[ -n "${mergeable}" ]]; then
     local mergeable_color
     case $mergeable in
@@ -78,6 +83,7 @@ main() {
     ret+="${mergeable_color}${mergeable}${NO_COLOR} "
   fi
 
+  # https://docs.github.com/en/free-pro-team@latest/graphql/reference/enums#pullrequestreviewstate
   if [[ -n "${review_state}" ]]; then
     local review_state_color
     case $review_state in
