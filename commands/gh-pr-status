@@ -3,6 +3,14 @@
 # gh-pr-status is intended to be used with starship/starship custom commands.
 # https://starship.rs/config/#custom-commands
 
+[[ -n $DEBUG ]] && set -x
+
+set -eu
+set -o pipefail
+
+# ------------------------------------------------------------
+# global variables
+
 readonly ESC=$(printf '\033')
 readonly RED="${ESC}[31m"
 readonly GREEN="${ESC}[32m"
@@ -11,11 +19,36 @@ readonly MAGENTA="${ESC}[35m"
 readonly CYAN="${ESC}[36m"
 readonly NO_COLOR="${ESC}[m"
 
-query() {
-  local -r abspath=$(git rev-parse --show-toplevel)
-  local -r owner=$(basename "$(dirname "${abspath}")")
-  local -r repo=$(basename "${abspath}")
-  local -r branch=$(git rev-parse --abbrev-ref HEAD)
+readonly MAIN_BRANCH='main'
+readonly MASTER_BRANCH='master'
+
+if [[ -n "${XDG_CACHE_HOME}" ]]; then
+  readonly CACHE_DIR="${XDG_CACHE_HOME}/gh-pr-status"
+else
+  readonly CACHE_DIR="${HOME}/.cache/gh-pr-status" # fallback
+fi
+
+readonly CACHE_TTL=300 # 5 min
+
+# ------------------------------------------------------------
+# initialization
+
+declare stat
+if ! stat --help >/dev/null 2>&1; then
+  if gstat --help >/dev/null 2>&1; then
+    stat='gstat'
+  else
+    echo '[ERROR] GNU stat is required' >&2
+    exit 1
+  fi
+fi
+
+# ------------------------------------------------------------
+
+query_pr_status() {
+  local -r owner="$1"
+  local -r repo="$2"
+  local -r branch="$3"
 
   # https://cli.github.com/manual/gh_api
   # https://docs.github.com/en/free-pro-team@latest/graphql/reference/queries#repository
@@ -42,23 +75,61 @@ query() {
   '
 }
 
-main() {
-  local -r result=$(query)
+save_cache() {
+  local -r filename="$1"
+  local -r content="$2"
 
-  local -r number=$(echo "${result}" | jq -r '.data.repository.pullRequests.nodes[0].number | select( . != null)')
-  local -r merged=$(echo "${result}" | jq -r '.data.repository.pullRequests.nodes[0].merged | select( . != null)')
-  local -r mergeable=$(echo "${result}" | jq -r '.data.repository.pullRequests.nodes[0].mergeable | select( . != null)')
-  local -r review_state=$(echo "${result}" | jq -r '.data.repository.pullRequests.nodes[0].reviews.nodes[0].state | select(. != null)')
+  local -r filepath="${CACHE_DIR}/${filename}"
 
-  local ret
+  echo -n "${content}" >"${filepath}" # this can override the existing file
+}
+
+restore_cache() {
+  local -r filename="$1"
+
+  local -r filepath="${CACHE_DIR}/${filename}"
+  if [[ ! -f "${filepath}" ]]; then
+    return 1
+  fi
+
+  local -r lastly_modified_at=$("${stat}" "${filepath}" -c "+%Y")
+  local -r now=$(date "+%s")
+  local -r elapsed_time="$((now - lastly_modified_at))"
+
+  if [[ "${elapsed_time}" -lt "${CACHE_TTL}" ]]; then
+    cat "${filepath}"
+    return 0
+  fi
+
+  return 1
+}
+
+escape_filename() {
+  local -r filename="$1"
+
+  echo "${filename/\//-}"
+}
+
+create_prompt() {
+  local -r query_result="$1"
+
+  local number
+  number="$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].number | select( . != null)')"
+  [[ -n "${number}" ]] && local -r number="#${number}" # add prefix if number is not empty
+
+  local -r merged=$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].merged | select( . != null)')
+  local -r mergeable=$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].mergeable | select( . != null)')
+  local -r review_state=$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].reviews.nodes[0].state | select(. != null)')
+
+  local prompt
 
   if [[ -n "${number}" ]]; then
-    ret+="${CYAN}${number}${NO_COLOR} "
+    prompt+="${CYAN}${number}${NO_COLOR} "
   fi
 
   if [[ "${merged}" == 'true' ]]; then
-    ret+="${MAGENTA}MERGED${NO_COLOR}"
-    echo "${ret}"
+    prompt+="${MAGENTA}MERGED${NO_COLOR}"
+    echo "${prompt}"
     return
   fi
 
@@ -80,7 +151,7 @@ main() {
         return 1
         ;;
     esac
-    ret+="${mergeable_color}${mergeable}${NO_COLOR} "
+    prompt+="${mergeable_color}${mergeable}${NO_COLOR} "
   fi
 
   # https://docs.github.com/en/free-pro-team@latest/graphql/reference/enums#pullrequestreviewstate
@@ -101,10 +172,38 @@ main() {
         return 1
         ;;
     esac
-    ret+="${review_state_color}${review_state}${NO_COLOR} "
+    prompt+="${review_state_color}${review_state}${NO_COLOR} "
   fi
 
-  echo -n "${ret}"
+  echo -n "${prompt}"
+}
+
+main() {
+  [[ -d "${CACHE_DIR}" ]] || mkdir -p "${CACHE_DIR}"
+
+  local -r abspath=$(git rev-parse --show-toplevel)
+  local -r owner=$(basename "$(dirname "${abspath}")")
+  local -r repo=$(basename "${abspath}")
+  local -r branch=$(git rev-parse --abbrev-ref HEAD)
+
+  if [[ "${branch}" == "${MAIN_BRANCH}" || "${branch}" == "${MASTER_BRANCH}" ]]; then
+    return # skip when at main|master branch
+  fi
+
+  local -r cache_filename=$(escape_filename "${owner}-${repo}-${branch}")
+
+  if cached_content=$(restore_cache "${cache_filename}"); then
+    echo -n "${cached_content}"
+    return
+  fi
+
+  # Execute GitHub GraphQL API v4
+  local -r query_result=$(query_pr_status "${owner}" "${repo}" "${branch}")
+
+  local -r prompt="$(create_prompt "${query_result}")"
+
+  save_cache "${cache_filename}" "${prompt}"
+  echo -n "${prompt}"
 }
 
 main "$@"
