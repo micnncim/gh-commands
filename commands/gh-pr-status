@@ -104,7 +104,7 @@ restore_cache() {
 escape_filename() {
   local -r filename="$1"
 
-  echo "${filename/\//-}"
+  echo "${filename//\//-}"
 }
 
 create_prompt() {
