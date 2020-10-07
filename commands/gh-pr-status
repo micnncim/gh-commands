@@ -116,7 +116,8 @@ create_prompt() {
 
   local -r merged=$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].merged | select( . != null)')
   local -r mergeable=$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].mergeable | select( . != null)')
-  local -r review_state=$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].reviews.nodes[0].state | select(. != null)')
+  local review_state
+  review_state=$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].reviews.nodes[0].state | select(. != null)')
 
   local prompt
 
@@ -152,25 +153,26 @@ create_prompt() {
   fi
 
   # https://docs.github.com/en/free-pro-team@latest/graphql/reference/enums#pullrequestreviewstate
-  if [[ -n "${review_state}" ]]; then
-    local review_state_color
-    case $review_state in
-      'APPROVED')
-        review_state_color="${GREEN}"
-        ;;
-      'CHANGES_REQUESTED')
-        review_state_color="${RED}"
-        ;;
-      'COMMENTED' | 'DISMISSED' | 'PENDING')
-        review_state_color="${YELLOW}"
-        ;;
-      *)
-        echo "[ERROR] invalid review state: ${review_state}" >&2
-        return 1
-        ;;
-    esac
-    prompt+="${review_state_color}${review_state}${NO_COLOR} "
+  if [[ -z "${review_state}" ]]; then
+    review_state='NOT_REVIEWED'
   fi
+  local review_state_color
+  case $review_state in
+    'APPROVED')
+      review_state_color="${GREEN}"
+      ;;
+    'CHANGES_REQUESTED')
+      review_state_color="${RED}"
+      ;;
+    'COMMENTED' | 'DISMISSED' | 'PENDING' | 'NOT_REVIEWED')
+      review_state_color="${YELLOW}"
+      ;;
+    *)
+      echo "[ERROR] invalid review state: ${review_state}" >&2
+      return 1
+      ;;
+  esac
+  prompt+="${review_state_color}${review_state}${NO_COLOR} "
 
   echo -n "${prompt}"
 }
