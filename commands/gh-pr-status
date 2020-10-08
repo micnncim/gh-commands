@@ -101,6 +101,28 @@ restore_cache() {
   return 1
 }
 
+clear_cache() {
+  local -r filepath="$1"
+  local -r option="$2"
+
+  case $option in
+    'local')
+      rm "${filepath}"
+      echo "Cleared cache: ${filepath}" >&2
+      return
+      ;;
+    'all')
+      rm -rf "${CACHE_DIR}"
+      echo "Cleared cache: ${CACHE_DIR}" >&2
+      return
+      ;;
+    *)
+      echo "[ERROR] invalid --clear-cache value: ${option}" >&2
+      return 1
+      ;;
+  esac
+}
+
 escape_filename() {
   local -r filename="$1"
 
@@ -179,15 +201,15 @@ create_prompt() {
 }
 
 main() {
-  local clear_cache_flag
+  local clear_cache_option
 
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
       --clear-cache=*)
-        clear_cache_flag=${1#*=}
+        clear_cache_option=${1#*=}
         ;;
       --clear-cache)
-        clear_cache_flag='local'
+        clear_cache_option='local'
         ;;
       *) ;;
     esac
@@ -205,23 +227,10 @@ main() {
   local -r repo=$(basename "${abspath}")
   local -r cache_filepath="${CACHE_DIR}/$(escape_filename "${owner}-${repo}-${branch}")"
 
-  case $clear_cache_flag in
-    '') ;;
-    'local')
-      rm "${cache_filepath}"
-      echo "Cleared cache: ${cache_filepath}" >&2
-      return
-      ;;
-    'all')
-      rm -rf "${CACHE_DIR}"
-      echo "Cleared cache: ${CACHE_DIR}" >&2
-      return
-      ;;
-    *)
-      echo "[ERROR] invalid --clear-cache value: ${clear_cache_flag}" >&2
-      return 1
-      ;;
-  esac
+  if [[ -n "${clear_cache_option}" ]]; then
+    clear_cache "${cache_filepath}" "${clear_cache_option}"
+    return "$?"
+  fi
 
   if cached_content=$(restore_cache "${cache_filepath}"); then
     echo -n "${cached_content}"
