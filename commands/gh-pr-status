@@ -104,7 +104,7 @@ restore_cache() {
 escape_filename() {
   local -r filename="$1"
 
-  echo "${filename//\//-}"
+  echo -n "${filename//\//-}"
 }
 
 create_prompt() {
@@ -112,7 +112,8 @@ create_prompt() {
 
   local number
   number="$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].number | select( . != null)')"
-  [[ -n "${number}" ]] && local -r number="#${number}" # add prefix if number is not empty
+  [[ -z "${number}" ]] && return # skip creation of prompt if PR doesn't exist
+  local -r number="#${number}"
 
   local -r merged=$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].merged | select( . != null)')
   local -r mergeable=$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].mergeable | select( . != null)')
@@ -127,7 +128,7 @@ create_prompt() {
 
   if [[ "${merged}" == 'true' ]]; then
     prompt+="${MAGENTA}MERGED${NO_COLOR}"
-    echo "${prompt}"
+    echo -n "${prompt}"
     return
   fi
 
