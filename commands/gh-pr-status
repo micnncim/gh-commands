@@ -58,7 +58,7 @@ query_pr_status() {
   gh api graphql -F owner="${owner}" -F name="${repo}" -F headRefName="${branch}" -f query='
   query ($owner: String!, $name: String!, $headRefName: String!) {
     repository(owner: $owner, name: $name) {
-      pullRequests(headRefName: $headRefName, first: 1) {
+      pullRequests(headRefName: $headRefName, states: OPEN, first: 1) {
         nodes {
           number
           merged
