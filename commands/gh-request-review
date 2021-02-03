@@ -1,0 +1,70 @@
+#!/bin/bash
+
+[[ -n $DEBUG ]] && set -x
+
+set -eu
+set -o pipefail
+
+readonly TIMEOUT='1800' # 30m
+readonly INTERVAL='60'  # 1m
+
+query_pr_number() {
+  local -r owner="$1"
+  local -r repo="$2"
+  local -r branch="$3"
+
+  # https://cli.github.com/manual/gh_api
+  # https://docs.github.com/en/free-pro-team@latest/graphql/reference/queries#repository
+  # https://docs.github.com/en/free-pro-team@latest/graphql/reference/objects#repository
+  # https://docs.github.com/en/free-pro-team@latest/graphql/reference/objects#pullrequest
+  # shellcheck disable=SC2016
+  gh api graphql -F owner="${owner}" -F name="${repo}" -F headRefName="${branch}" -f query='
+  query ($owner: String!, $name: String!, $headRefName: String!) {
+    repository(owner: $owner, name: $name) {
+      pullRequests(headRefName: $headRefName, states: OPEN, first: 1) {
+        nodes {
+          number
+        }
+      }
+    }
+  }
+  '
+}
+
+main() {
+  local -r reviewers=("${@}")
+
+  local -r abspath=$(git rev-parse --show-toplevel)
+  local -r owner=$(basename "$(dirname "${abspath}")")
+  local -r repo=$(basename "${abspath}")
+  local -r branch=$(git rev-parse --abbrev-ref HEAD)
+  local -r query_result=$(query_pr_number "${owner}" "${repo}" "${branch}")
+  local -r pr_number="$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].number | select( . != null)')"
+
+  local -r head_sha=$(gh api "repos/${owner}/${repo}/pulls/${pr_number}" | jq -r '.head.sha')
+
+  local reviewers_payload='{"reviewers": []}'
+  for reviewer in "${reviewers[@]}"; do
+    reviewers_payload=$(echo "${reviewers_payload}" | jq --arg new "${reviewer}" '.reviewers += [$new]')
+  done
+
+  end=$((SECONDS + TIMEOUT))
+
+  while [ $SECONDS -lt $end ]; do
+    local -a statuses=()
+    for status in $(gh api "repos/${owner}/${repo}/commits/${head_sha}/check-suites" | jq -r '.check_suites[].status'); do
+      statuses+=("${status}")
+    done
+
+    for status in "${statuses[@]}"; do
+      if [[ "${status}" != "completed" ]]; then
+        break
+      fi
+      gh api "/repos/${owner}/${repo}/pulls/${pr_number}/requested_reviewers" -f "${reviewers_payload}"
+    done
+
+    sleep "${INTERVAL}"
+  done
+}
+
+main "$@"
