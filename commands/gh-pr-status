@@ -3,59 +3,16 @@
 # gh-pr-status is intended to be used with starship/starship custom commands.
 # https://starship.rs/config/#custom-commands
 
-[[ -n $DEBUG ]] && set -x
-
 set -eu
 set -o pipefail
 
-# ------------------------------------------------------------
-# global variables
-
-readonly ESC=$(printf '\033')
-readonly RED="${ESC}[31m"
-readonly GREEN="${ESC}[32m"
-readonly YELLOW="${ESC}[33m"
-readonly MAGENTA="${ESC}[35m"
-readonly CYAN="${ESC}[36m"
-readonly NO_COLOR="${ESC}[m"
-
-readonly MAIN_BRANCH='main'
-readonly MASTER_BRANCH='master'
-
-if [[ -n "${XDG_CACHE_HOME}" ]]; then
-  readonly CACHE_DIR="${XDG_CACHE_HOME}/gh-pr-status"
-else
-  readonly CACHE_DIR="${HOME}/.cache/gh-pr-status" # fallback
-fi
-
-readonly CACHE_TTL=300 # 5 min
-
-# ------------------------------------------------------------
-# initialization
-
-declare stat
-if ! stat --help >/dev/null 2>&1; then
-  if gstat --help >/dev/null 2>&1; then
-    stat='gstat'
-  else
-    echo '[ERROR] GNU stat is required' >&2
-    exit 1
-  fi
-fi
-
-# ------------------------------------------------------------
-
-query_pr_status() {
-  local -r owner="$1"
-  local -r repo="$2"
-  local -r branch="$3"
-
-  # https://cli.github.com/manual/gh_api
-  # https://docs.github.com/en/free-pro-team@latest/graphql/reference/queries#repository
-  # https://docs.github.com/en/free-pro-team@latest/graphql/reference/objects#repository
-  # https://docs.github.com/en/free-pro-team@latest/graphql/reference/objects#pullrequest
+# Shows the PR number, whether the PR is merged, whether the PR is mergeable,
+# what state the latest review has.
+#
+# The format is: [$number $merged $mergeable $review]
+prompt() {
   # shellcheck disable=SC2016
-  gh api graphql -F owner="${owner}" -F name="${repo}" -F headRefName="${branch}" -f query='
+  gh api graphql --cache '10m' -F owner="{owner}" -F name="{repo}" -F headRefName="{branch}" -f query='
   query ($owner: String!, $name: String!, $headRefName: String!) {
     repository(owner: $owner, name: $name) {
       pullRequests(headRefName: $headRefName, states: OPEN, first: 1) {
@@ -71,180 +28,35 @@ query_pr_status() {
         }
       }
     }
-  }
-  '
+  }' --template \
+    '
+    {{- $nodes := .data.repository.pullRequests.nodes -}}
+    {{- if $nodes }}
+      {{- $node := (index $nodes 0) -}}
+      {{- printf "#%v" $node.number -}}
+      {{- if eq $node.merged true -}}{{- " MERGED" -}}{{- end -}}
+      {{- printf " %s" $node.mergeable -}}
+      {{- if $node.reviews.nodes }}
+        {{- printf " %s" (index $node.reviews.nodes 0).state -}}
+      {{- end -}}
+    {{- end -}}
+    '
 }
 
-save_cache() {
-  local -r filepath="$1"
-  local -r content="$2"
-
-  echo -n "${content}" >"${filepath}" # this can override the existing file
-}
-
-restore_cache() {
-  local -r filepath="$1"
-
-  if [[ ! -f "${filepath}" ]]; then
-    return 1
-  fi
-
-  local -r lastly_modified_at=$("${stat}" "${filepath}" -c "+%Y")
-  local -r now=$(date "+%s")
-  local -r elapsed_time="$((now - lastly_modified_at))"
-
-  if [[ "${elapsed_time}" -lt "${CACHE_TTL}" ]]; then
-    cat "${filepath}"
-    return 0
-  fi
-
-  return 1
-}
-
-clear_cache() {
-  local -r filepath="$1"
-  local -r option="$2"
-
-  case $option in
-    'local')
-      rm "${filepath}"
-      echo "Cleared cache: ${filepath}" >&2
-      return
-      ;;
-    'all')
-      rm -rf "${CACHE_DIR}"
-      echo "Cleared cache: ${CACHE_DIR}" >&2
-      return
-      ;;
-    *)
-      echo "[ERROR] invalid --clear-cache value: ${option}" >&2
-      return 1
-      ;;
-  esac
-}
-
-escape_filename() {
-  local -r filename="$1"
-
-  echo -n "${filename//\//-}"
-}
-
-create_prompt() {
-  local -r query_result="$1"
-
-  local number
-  number="$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].number | select( . != null)')"
-  [[ -z "${number}" ]] && return # skip creation of prompt if PR doesn't exist
-  local -r number="#${number}"
-
-  local -r merged=$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].merged | select( . != null)')
-  local -r mergeable=$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].mergeable | select( . != null)')
-  local review_state
-  review_state=$(echo "${query_result}" | jq -r '.data.repository.pullRequests.nodes[0].reviews.nodes[0].state | select(. != null)')
-
-  local prompt
-
-  if [[ -n "${number}" ]]; then
-    prompt+="${CYAN}${number}${NO_COLOR} "
-  fi
-
-  if [[ "${merged}" == 'true' ]]; then
-    prompt+="${MAGENTA}MERGED${NO_COLOR}"
-    echo -n "${prompt}"
-    return
-  fi
-
-  # https://docs.github.com/en/free-pro-team@latest/graphql/reference/enums#mergeablestate
-  if [[ -n "${mergeable}" ]]; then
-    local mergeable_color
-    case $mergeable in
-      'MERGEABLE')
-        mergeable_color="${GREEN}"
-        ;;
-      'CONFLICTING')
-        mergeable_color="${RED}"
-        ;;
-      'UNKNOWN')
-        mergeable_color="${YELLOW}"
-        ;;
-      *)
-        echo "[ERROR] invalid mergeable state: ${mergeable}" >&2
-        return 1
-        ;;
-    esac
-    prompt+="${mergeable_color}${mergeable}${NO_COLOR} "
-  fi
-
-  # https://docs.github.com/en/free-pro-team@latest/graphql/reference/enums#pullrequestreviewstate
-  if [[ -z "${review_state}" ]]; then
-    review_state='NOT_REVIEWED'
-  fi
-  local review_state_color
-  case $review_state in
-    'APPROVED')
-      review_state_color="${GREEN}"
-      ;;
-    'CHANGES_REQUESTED')
-      review_state_color="${RED}"
-      ;;
-    'COMMENTED' | 'DISMISSED' | 'PENDING' | 'NOT_REVIEWED')
-      review_state_color="${YELLOW}"
-      ;;
-    *)
-      echo "[ERROR] invalid review state: ${review_state}" >&2
-      return 1
-      ;;
-  esac
-  prompt+="${review_state_color}${review_state}${NO_COLOR} "
-
-  echo -n "${prompt}"
+get_default_branch() {
+  gh api 'repos/{owner}/{repo}' --cache '24h' --jq '.default_branch'
 }
 
 main() {
-  local clear_cache_option
-
-  while [[ "$#" -gt 0 ]]; do
-    case "$1" in
-      --clear-cache=*)
-        clear_cache_option=${1#*=}
-        ;;
-      --clear-cache)
-        clear_cache_option='local'
-        ;;
-      *) ;;
-    esac
-    shift
-  done
-
-  local -r branch=$(git rev-parse --abbrev-ref HEAD)
-
-  if [[ "${branch}" == "${MAIN_BRANCH}" || "${branch}" == "${MASTER_BRANCH}" ]]; then
-    return # skip when at main|master branch
-  fi
-
-  local -r abspath=$(git rev-parse --show-toplevel)
-  local -r owner=$(basename "$(dirname "${abspath}")")
-  local -r repo=$(basename "${abspath}")
-  local -r cache_filepath="${CACHE_DIR}/$(escape_filename "${owner}-${repo}-${branch}")"
-
-  if [[ -n "${clear_cache_option}" ]]; then
-    clear_cache "${cache_filepath}" "${clear_cache_option}"
-    return "$?"
-  fi
-
-  if cached_content=$(restore_cache "${cache_filepath}"); then
-    echo -n "${cached_content}"
+  if ! git remote -v | grep 'github\.com' >/dev/null; then
     return
   fi
 
-  # Execute GitHub GraphQL API v4
-  local -r query_result=$(query_pr_status "${owner}" "${repo}" "${branch}")
-  local -r prompt="$(create_prompt "${query_result}")"
+  if [[ "$(git rev-parse --abbrev-ref HEAD)" == "$(get_default_branch)" ]]; then
+    return
+  fi
 
-  [[ -d "${CACHE_DIR}" ]] || mkdir -p "${CACHE_DIR}"
-  save_cache "${cache_filepath}" "${prompt}"
-
-  echo -n "${prompt}"
+  prompt
 }
 
 main "$@"
